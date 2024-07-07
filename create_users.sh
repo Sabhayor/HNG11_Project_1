@@ -56,8 +56,12 @@ while IFS=';' read -r username groups; do
     IFS=',' read -ra group_array <<< "$groups"
     for group in "${group_array[@]}"; do
       if getent group "$group" &>/dev/null; then
-        sudo usermod -aG "$group" "$username"
-        echo "User '$username' added to group '$group'" | sudo tee -a "$LOG_FILE"
+        if id -nG "$username" | grep -qw "$group"; then
+          echo "User '$username' already belongs to group '$group'" | sudo tee -a "$LOG_FILE"
+        else
+          sudo usermod -aG "$group" "$username"
+          echo "User '$username' added to group '$group'" | sudo tee -a "$LOG_FILE"
+        fi
       else
         sudo groupadd "$group"
         sudo usermod -aG "$group" "$username"
