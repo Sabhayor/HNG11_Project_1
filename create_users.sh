@@ -1,73 +1,79 @@
 #!/bin/bash
 
-# Check if the input file is provided
-if [ $# -ne 1 ]; then
-  echo "Usage: $0 <input_file>"
-  exit 1
+# Script: create_users.sh
+# Description: Creates users and groups based on input file, sets up home directories,
+#              generates random passwords, and logs all actions.
+# Usage: sudo ./create_users.sh <input_file>
+
+# Check if script is run as root
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root" 
+   exit 1
+fi
+
+# Check if input file is provided
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <input_file>"
+    exit 1
 fi
 
 INPUT_FILE=$1
 LOG_FILE="/var/log/user_management.log"
 PASSWORD_FILE="/var/secure/user_passwords.txt"
 
-# Ensure log file and password file have the correct permissions
-sudo touch "$LOG_FILE"
-sudo touch "$PASSWORD_FILE"
-sudo chmod 600 "$LOG_FILE"
-sudo chmod 600 "$PASSWORD_FILE"
+# Ensure log file and password file exist and have correct permissions
+touch "$LOG_FILE"
+chmod 600 "$LOG_FILE"
+touch "$PASSWORD_FILE"
+chmod 600 "$PASSWORD_FILE"
 
-# Check if the input file exists
-if [ ! -f "$INPUT_FILE" ]; then
-  echo "Error: File '$INPUT_FILE' not found!" | sudo tee -a "$LOG_FILE"
-  exit 1
-fi
+# Function to log messages
+log_message() {
+    echo "$(date): $1" >> "$LOG_FILE"
+}
 
 # Function to generate a random password
 generate_password() {
-  tr -dc 'A-Za-z0-9!@#$%^&*()_+{}|:<>?' </dev/urandom | head -c 16
+    openssl rand -base64 12 | tr -d "=+/" | cut -c1-12
 }
 
-# Read the input file line by line
-while IFS=';' read -r username groups; do
-  # Check if the username is empty
-  if [ -z "$username" ]; then
-    echo "Error: Username is empty in the line '$username;$groups'" | sudo tee -a "$LOG_FILE"
-    continue
-  fi
-  
-  # Create the user if not exists
-  if id "$username" &>/dev/null; then
-    echo "User '$username' already exists" | sudo tee -a "$LOG_FILE"
-  else
-    password=$(generate_password)
-    sudo useradd -m -s /bin/bash "$username"
-    echo "$username:$password" | sudo chpasswd
-    echo "User '$username' created with home directory and default shell" | sudo tee -a "$LOG_FILE"
-    echo "$username:$password" | sudo tee -a "$PASSWORD_FILE"
-    
-    # Set permissions for the user's home directory
-    sudo chmod 700 "/home/$username"
-    sudo chown "$username:$username" "/home/$username"
-    echo "Set permissions for /home/$username" | sudo tee -a "$LOG_FILE"
-  fi
+# Read input file line by line
+while IFS=';' read -r username groups
+do
+    # Skip empty lines
+    [ -z "$username" ] && continue
 
-  # Add the user to the specified groups
-  if [ -n "$groups" ]; then
+    # Create user if it doesn't exist
+    if ! id "$username" &>/dev/null; then
+        useradd -m -s /bin/bash "$username"
+        log_message "Created user: $username"
+    else
+        log_message "User already exists: $username"
+    fi
+
+    # Generate and set password
+    password=$(generate_password)
+    echo "$username:$password" | chpasswd
+    echo "$username:$password" >> "$PASSWORD_FILE"
+    log_message "Set password for user: $username"
+
+    # Create groups and add user to groups
     IFS=',' read -ra group_array <<< "$groups"
     for group in "${group_array[@]}"; do
-      if ! getent group "$group" &>/dev/null; then
-        sudo groupadd "$group"
-        echo "Group '$group' created" | sudo tee -a "$LOG_FILE"
-      fi
-      
-      if ! id -nG "$username" | grep -qw "$group"; then
-        sudo usermod -aG "$group" "$username"
-        echo "User '$username' added to group '$group'" | sudo tee -a "$LOG_FILE"
-      else
-        echo "User '$username' already belongs to group '$group'" | sudo tee -a "$LOG_FILE"
-      fi
+        if ! getent group "$group" &>/dev/null; then
+            groupadd "$group"
+            log_message "Created group: $group"
+        fi
+        usermod -aG "$group" "$username"
+        log_message "Added user $username to group: $group"
     done
-  fi
+
+    # Set appropriate permissions for home directory
+    home_dir="/home/$username"
+    chown "$username:$username" "$home_dir"
+    chmod 700 "$home_dir"
+    log_message "Set permissions for $home_dir"
+
 done < "$INPUT_FILE"
 
-echo "User creation and group assignment completed" | sudo tee -a "$LOG_FILE"
+echo "User creation process completed. Check $LOG_FILE for details."
